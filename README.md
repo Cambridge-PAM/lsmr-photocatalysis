@@ -8,7 +8,6 @@ Packages and notebooks for analysing Luminescent Solar Microreactor (LSMR) photo
 - Linear regression to find apparent quantum yield and reaction rate
 - UV-Vis spectra visualisation over experiment time
 
-
 ## File structure
 
 ```
@@ -53,7 +52,7 @@ lsmr-photocatalysis/
 
 Install Anaconda/Miniconda (Python), Git and VS Code if not already done so.
 
-Clone the repository to a local folder on your computer via Git Bash.
+Clone the repository to a local folder on your computer using Git Bash.
 
 ```bash
 git clone https://github.com/Cambridge-PAM/lsmr-photocatalysis.git
@@ -61,20 +60,20 @@ cd lsmr-photocatalysis
 ```
 Create and activate the Python environment.
 
-```
+```sh
 conda env create -f environment.yml
 conda activate lsmr-photocatalysis
 ```
 
 In `./src/lsmr_photocatalysis/settings.py`, change `DATA_DIR` to the local directory where the data files are stored, such as on RFS (performance will be slower on a network drive),
 
-```
+```python
 DATA_DIR = Path("Z:/Ocean Optics/yhn24")
 ```
 
 or as a relative directory by creating a new folder `./data` with the data files in the local repository itself (this is the default behaviour).
 
-```
+```python
 DATA_DIR = Path(__file__).parent.parent.parent / 'data'
 ```
 ## General workflow
@@ -87,15 +86,15 @@ DATA_DIR = Path(__file__).parent.parent.parent / 'data'
         - `StoppedFlow`
         - `ContinuousFlow`
     - Create an instance of the class and specify its attributes (refer to the files in `./src/lsmr_photocatalysis` for more information), e.g.
-        - `data` Data folder name.
-        - `c0`: Initial concentration/M of substrate of interest.
-        - `details`: Details of other reagents and concentrations.
-        - `x`: Dictionary key for `SUBSTRATE` properties, see `settings.py`.
-        - `film`: Polymer film name.
-        - `light`: LED colour.
-        - `wavelength`: LED wavelength/m.
-        - `power`: LED power/W.
-        - `correction`: Default choice for plots to be baseline corrected or not. Defaults to `True`.
+        - `data` Data folder name
+        - `c0`: Initial concentration/M of substrate of interest
+        - `details`: Details of other reagents and concentrations
+        - `x`: Dictionary key for `SUBSTRATE` properties, see `settings.py`
+        - `film`: Polymer film name
+        - `light`: LED colour
+        - `wavelength`: LED wavelength/m
+        - `power`: LED power/W
+        - `correction`: Default choice for plots to be baseline corrected or not. Defaults to `True`
         - etc.
     - Call methods on that instance to plot the desired graphs, e.g.
         - `concvstimeplot()`
