@@ -1,6 +1,6 @@
 # LSMR Photocatalysis
 
-Python package and Jupyter notebooks for analysing Luminescent Solar Microreactor (LSMR) photocatalysis results and an automated pump control script.
+Package and notebooks for analysing Luminescent Solar Microreactor (LSMR) photocatalysis results and an automated pump control script.
 
 ## Features
 - Data extraction from OceanOptics/OceanView files
