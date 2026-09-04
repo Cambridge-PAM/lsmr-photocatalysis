@@ -1,232 +1,190 @@
-from functions import *
+from .stoppedflow import StoppedFlow
+from .settings import FIGSIZE, DPI
+import numpy as np
+from numpy.typing import NDArray
 import matplotlib.pyplot as plt
 from matplotlib import cm as cm
 from matplotlib import colors as colors
 
-# stop flow with reaction in 50 ul chip (and film if any)
-# irradiation at each time point, then uv-vis immediately after in the same chip
-# flushed with fresh starting reaction mixture and repeated for new time point
+class ContinuousFlow(StoppedFlow):
+    """
+    Continuous flow with reaction/LED/film and UV-Vis at opposite ends of a single 250 ul reactor chamber.
+    Flow rate changes according to flow scheme at different time points to change residence time tR.
 
-tR = "$t_\\mathrm{R}$" # tR
-evold = (r"[EV$^{+\!\cdot\!}$]", r"[EV$^{2\!+\!}$]$_0$", 600, 1.22e6, 700e-6)
-ev = (r"[EV$^{+\!\cdot\!}$]", r"[EV$^{2\!+\!}$]$_0$", 600, 1.22e6, 800e-6)
-bv = (r"[BV$^{+\!\cdot\!}$]", r"[BV$^{2\!+\!}$]$_0$", 535, 1.4e6, 800e-6)
-area = np.pi*(9.5e-3/2)**2 # m-2, area of thorlabs power meter detector
+    Args:
+        data: Data folder name.
+        tRs: Residence time/s points.
+        points: Time/s points to extract data.
+        start: Reaction start timestamp in `'hh-mm-ss-msmsms'`.
+        c0: Initial concentration/M of substrate of interest.
+        details: Details of other reagents and concentrations.
+        x: Dictionary key for `SUBSTRATE` properties, see `settings.py`.
+        film: Polymer film name. Defaults to no film.
+        light: LED colour. Defaults to blue light.
+        wavelength: LED wavelength/m.
+        power: LED power/W.
+        correction: Default choice for plots to be baseline corrected or not. Defaults to `True`.
+        reverse: Denotes that the reaction time/s points were recorded from largest to smallest.
+        duration: How long to plot for `detectorconcplot()` and `detectorspectrumplot()`. Defaults to `1e10`.
+    
+    Attributes:
+        x: LaTeX text formatting for substrate concentration.
+        x0: LaTeX text formatting for substrate initial concentration.
+        peak: Substrate absorption peak wavelength/m.
+        e: Substrate extinction coefficient/M m-1.
+        l: Path length/m of reactor chamber.
+        bregions: Wavelength/nm regions to define as baseline.
+        lmin1: Wavelength/nm minimum for `spectrumvstimeplot()`.
+        lmax1: Wavelength/nm maximum for `spectrumvstimeplot()`.
+        lmin2: Wavelength/nm minimum for `detectorspectrumplot()`
+        lmax2: Wavelength/nm maximum for `detectorspectrumplot()`
+    """
 
-# simple selector to determine which viologen labels and values to use 
-def viologen(x):
-    if x == 'E':
-        return ev
-    elif x == 'B':
-        return bv
-    elif x == 'Eold':
-        return evold
+    ttext = r'$t_\mathrm{R}$' # residence time
 
-# time point intervals in s between flow rate switches
-def flowpoints(tRs, tbuffer, vrxn, vfull):
-    flowrates = [flowprop(tR=tR, vol=vrxn) for tR in tRs] # flow rates for each tR
-    points = []
-    for i in range(len(tRs)):
-        points.append(round(flowprop(flowrate=flowrates[i], vol=vfull) + 2*tbuffer))
-    return points
+    def __init__(self, data: str, tRs: NDArray[np.float64], points: NDArray[np.float64], start: str, 
+                 c0: float, details: str, x: str, film: str, light: str, wavelength: float, power: float,
+                 correction: bool = True, reverse: bool = False, duration: float = 1e10):
+        super().__init__(data, tRs, c0, details, x, film, light, wavelength, power, correction=correction, reverse=reverse)
+        self.points: NDArray[np.float64] = points # override from _Experiment
+        self.start: str = start
+        self.duration: float = duration
 
-# time points in s to record absorbances, cumulative from the start of experiment
-def recpoints(tRs, tbuffer, vrxn, vfull):
-    flowrates = [flowprop(tR=tR, vol=vrxn) for tR in tRs] # flow rates for each tR
-    points = []
-    for i in range(len(tRs)):
-        if i == 0:
-            prevtime = 0
+    def detectorconcplot(self, correction: bool | None = None, duration: float | None = None) -> None:
+        """
+        Plots the concentration/M of the substrate passing through the UV-Vis detector over course of the entire experiment.
+
+        Args:
+            correction: Overrides instance's default attribute for plots to be baseline corrected or not. Defaults to `None` then points to the instance's attribute.
+            duration: Overrides instance's default attribute for how long to plot. Defaults to `None` then points to the instance's attribute.
+        """
+        
+        t, c = self._concvstime(correction=correction, duration=duration)
+        crec = self._concvstimepoints(correction=correction)
+        cplot = c*1e3 # plot concentrations in mM
+        crecplot = crec*1e3
+
+        fig, ax = plt.subplots(figsize=FIGSIZE, dpi=DPI, constrained_layout=True)
+        ax.plot(t, cplot, color='black', alpha=0.2) # plot the overall detector reading
+        ax.plot(self.points, crecplot, 'x', color='black') # plot each recorded point
+
+        fig.canvas.draw() # calculate ticks preliminarily
+        xscale = np.diff(ax.get_xticks())[0]
+        yscale = np.diff(ax.get_yticks())[0]
+        xmin = np.floor(min(t)/xscale)*xscale
+        xmax = np.ceil(max(t)/xscale)*xscale
+        ymin = np.floor((min(cplot)-0.3*yscale)/yscale)*yscale
+        ymax = np.ceil((max(cplot)+0.3*yscale)/yscale)*yscale
+        if abs(min(cplot)) <= 0.3*yscale: # if the smallest c value is approximately zero
+            ymin = 0
+
+        mask = ((xmax - 2*xscale) <= t) & (t <= xmax) # mask near the end of the plot
+        if np.average(cplot[mask], weights=np.linspace(0, 1, len(cplot[mask]))) <= (ymin+ymax)/2: # average of c values weighted towards indices on the right 
+            b, ha, va = 0.97, 'right', 'top' # put the text on the top right if weighted average is on the bottom
         else:
+            b, ha, va = 0.03, 'right', 'bottom' # put the text on the bottom right if weighted average is on the bottom
+        ax.text(0.98, b, f'{self.x0} = {self.c0*1e3:.0f} mM\n{self.details}', transform=ax.transAxes, ha=ha, va=va) # reaction conditions
+
+        ax.set_xlim(xmin, xmax)
+        ax.set_xticks(np.arange(xmin, xmax+abs(1e-10*xmax), xscale))
+        ax.set_ylim(ymin, ymax)
+        ax.set_yticks(np.arange(ymin, ymax+abs(1e-10*ymax), yscale))
+        ax.set_xlabel('time / s')
+        ax.set_ylabel(f'{self.x} / mM')
+        ax.set_title(f'Detected {self.x} / mM over time / s {self._desc()}')
+        plt.show()
+
+    def detectorspectrumplot(self, correction: bool | None = None, duration: float | None = None,
+                             lmin: float | None = None, lmax: float | None = None, amin: float | None = None, amax: float | None = None) -> None:
+        """
+        Plots what the UV-Vis detector sees as a heat map over the course of the entire experiment.
+
+        Args:
+            correction: Overrides instance's default attribute for plots to be baseline corrected or not. Defaults to `None` then points to the instance's attribute.
+            duration: Overrides instance's default attribute for how long to plot. Defaults to `None` then points to the instance's attribute.
+            lmin: Wavelength/nm minimum. Defaults to `None` then points to the instance's attribute `lmin2`.
+            lmax: Wavelength/nm maximum. Defaults to `None` then points to the instance's attribute `lmin2`.
+            amin: Absorbance minimum. Defaults to `None` then points to the minimum value in the data.
+            amax: Absorbance maximum. Defaults to `None` then points to the maximum value in the data.
+        """
+        if lmin is None:
+            lmin = self.lmin2
+        if lmax is None:
+            lmax = self.lmax2
+
+        t, l, a = self._spectrumvstime(correction=correction, duration=duration)
+        mask = (lmin <= l) & (l <= lmax) 
+        a = a[mask, :]
+        l = l[mask]
+
+        if amin == None:
+            amin = np.floor(a.min()/0.1)*0.1 # round down to nearest 0.1
+        if amax == None:
+            amax = np.ceil(a.max()/0.1)*0.1 # round up to nearest 0.1
+        
+        fig, ax = plt.subplots(figsize=FIGSIZE, dpi=DPI, constrained_layout=True)
+        cmap = plt.get_cmap('viridis_r')
+        ax.contourf(t, l, a, levels=100, vmin=amin, vmax=amax, cmap=cmap)
+        for size, edge, color in [(7, 3, 'black'), (6, 1.5, 'white')]:
+            ax.plot(self.points, np.full(len(self.points), self.peak), 'x', markersize=size, markeredgewidth=edge, color=color) # plot each recorded point
+        ax.text(0.98, 0.98, f'{self.x0} = {self.c0*1e3:.0f} mM\n{self.details}', transform=ax.transAxes, ha='right', va='top') # reaction conditions
+
+        norm = colors.Normalize(vmin=amin, vmax=amax)
+        sm = cm.ScalarMappable(norm=norm, cmap=cmap)
+        cbar = plt.colorbar(sm, ax=ax)
+        cbar.set_ticks(np.arange(amin, amax+abs(1e-10*amax), 0.1))
+        cbar.set_label('absorbance')
+
+        fig.canvas.draw() # calculate ticks preliminarily
+        xscale = np.diff(ax.get_xticks())[0]
+        yscale = np.diff(ax.get_yticks())[0]
+        xmin = np.floor(min(t)/xscale)*xscale
+
+        ax.set_xticks(np.arange(xmin, np.ceil(max(t))+abs(1e-10*max(t)), xscale))
+        ax.set_ylim(lmin, lmax)
+        ax.set_yticks(np.arange(lmin, lmax+abs(1e-10*lmax), yscale))
+        ax.set_xlabel('time / s')
+        ax.set_ylabel(r'$\lambda$ / nm')
+        ax.set_title(f'UV-Vis spectra for {self.x[1:-1]}{self._textcorr(correction)[0]} over time / s {self._desc()}')
+        plt.show()
+
+    @staticmethod
+    def flowpoints(tRs: NDArray[np.float64], tbuffer: float, vrxn: float, vfull: float) -> NDArray[np.float64]:
+        """
+        Calculates the time/s point intervals between flow rate switches according to the flow scheme.
+
+        Args:
+            tR: Residence times/s
+            tbuffer: Time/s after the solution fully fills the reactor chamber before recording
+            vrxn: Reaction volume/ul under LED/film
+            vfull: Full reactor chamber volume/ul
+        
+        Returns:
+            points: time/s point intervals between flow rate switches.
+        """
+        flowrates = vrxn/tRs # flow rates for each tR
+        points = np.round(vfull/flowrates + 2*tbuffer)
+        return points
+
+    @staticmethod
+    def recpoints(tRs: NDArray[np.float64], tbuffer: float, vrxn: float, vfull: float) -> NDArray[np.float64]:
+        """
+        Calculates the time/s points where an absorbance measurement should be recorded/taken according to the flow scheme,
+        cumulative from the start of the experiment.
+
+        Args:
+            tR: Residence times/s
+            tbuffer: Time/s after the solution fully fills the reactor chamber before recording
+            vrxn: Reaction volume/ul under LED/film
+            vfull: Full reactor chamber volume/ul
+        
+        Returns:
+            points: time/s points for measurement recording/taking.
+        """
+        flowrates = vrxn/tRs # flow rates for each tR
+        points = []
+        prevtime = 0
+        for i in range(len(tRs)):
+            points.append(round(prevtime + vfull/flowrates[i] + tbuffer))
             prevtime = points[-1] + tbuffer
-        points.append(round(prevtime + flowprop(flowrate=flowrates[i], vol=vfull) + tbuffer))
-    return points
-
-# concentration vs time point plot with linear regression
-def concvstimeplot(data, tRs, points, start, c0, x, film, light, wavelength, power,
-                   istart=1, iend=1e10, i=None, r2threshold=0, interceptthreshold=1e10):
-
-    XV, XV0, peak, e, l = viologen(x)
-    c = concvstimepoints(data, peak, e, l, points=points, start=start)
-    cscale = [conc*1e3 for conc in c] # plot concentrations in mM
-    n = ratephotons(power, wavelength, l*area*1e3) # M s-1 of photons
-
-    fig, ax = plt.subplots()
-    ax.plot(tRs, cscale, 'x', color='black')
-    fit, i = linreg(tRs, c, istart=istart, iend=iend, i=i, r2threshold=r2threshold, interceptthreshold=interceptthreshold)
-    x = np.linspace(tRs[0], tRs[i], 100) # plot linear regression line over the initial linear region
-    y = (fit.slope*x + fit.intercept)*1e3
-    ax.plot(x, y, color='black')
-    ax.text(0.95, 0.05,
-            rf'$\Phi$ = $\mathrm{{\frac{{rate_{{reaction}}}}{{rate_{{photon}}}}}}$ = {errformat(fit.slope/n, fit.stderr/n, 1e-2)} %''\n'
-            rf'$k$ = {errformat(fit.slope/c0, fit.stderr/c0, prefix=1e-6)} $\times$ 10$^{{-6}}$ s$^{{-1}}$''\n'
-            rf'rate = slope = {errformat(fit.slope, fit.stderr, prefix=1e-6)} $\mathrm{{\mu}}$M s$^{{-1}}$''\n'
-            f'intercept = {errformat(fit.intercept, fit.intercept_stderr, prefix=1e-3)} mM\n'
-            f'$r^2$ = {fit.rvalue**2:.3f}',
-            transform=ax.transAxes, ha="right", va="bottom")
-
-    fig.canvas.draw() # calculate ticks preliminarily
-    xscale = np.diff(ax.get_xticks())[0]
-    yscale = np.diff(ax.get_yticks())[0]
-    xmin = np.floor((min(tRs)-0.2*xscale)/xscale)*xscale
-    xmax = np.ceil((max(tRs)+0.2*xscale)/xscale)*xscale
-    ymin = np.floor((min(cscale)-0.2*yscale)/yscale)*yscale
-    ymax = np.ceil((max(cscale)+0.2*yscale)/yscale)*yscale
-
-    ax.set_xlim(xmin, xmax)
-    ax.set_xticks(np.arange(xmin, xmax+abs(0.00001*xmax), xscale))
-    ax.set_ylim(ymin, ymax)
-    ax.set_yticks(np.arange(ymin, ymax+abs(0.00001*ymax), yscale))
-    ax.set_xlabel(rf'{tR} / s')
-    ax.set_ylabel(rf'{XV} / mM')
-    ax.set_title(rf'{XV} / mM against {tR} / s for {XV0} = {c0*1e3:.0f} mM''\n'
-                 rf'with {film} film under {light} ({int(wavelength*1e9)} nm) light at {power*1e3:.1f} mW')
-    plt.show()
-
-# lnc vs time point plot for a first order reaction with linear regression
-def lncvstimeplot(data, tRs, points, start, c0, x, film, light, wavelength, power,
-                  istart=1, iend=1e10, i=None, r2threshold=0, interceptthreshold=1e10):
-
-    XV, XV0, peak, e, l = viologen(x)
-    c = concvstimepoints(data, peak, e, l, points=points, start=start)
-    lnc = [np.log(c0-conc) for conc in c]
-    n = ratephotons(power, wavelength, l*area*1e3) # M s-1 of photons
-    
-    fig, ax = plt.subplots()
-    ax.plot(tRs, lnc, 'x', color='black')
-    fit, i = linreg(tRs, lnc, istart=istart, iend=iend, i=i, r2threshold=r2threshold, interceptthreshold=interceptthreshold)
-    x = np.linspace(tRs[0], tRs[i], 100) # plot linear regression line over the initial linear region
-    y = (fit.slope*x + fit.intercept)
-    ax.plot(x, y, color='black')
-    ax.text(0.95, 0.95,
-            rf'$\Phi$ = $\mathrm{{\frac{{rate_{{reaction}}}}{{rate_{{photon}}}}}}$ = {errformat(-fit.slope*c0/n, fit.stderr*c0/n, 1e-2)} %''\n'
-            rf'$k$ = $-$slope = {errformat(-fit.slope, fit.stderr, prefix=1e-6)} $\times$ 10$^{{-6}}$ s$^{{-1}}$''\n'
-            f'intercept = {errformat(fit.intercept, fit.intercept_stderr, sci=False)}\n'
-            f'$r^2$ = {fit.rvalue**2:.3f}',
-            transform=ax.transAxes, ha="right", va="top")
-
-    fig.canvas.draw() # calculate ticks preliminarily
-    xscale = np.diff(ax.get_xticks())[0]
-    yscale = np.diff(ax.get_yticks())[0]
-    xmin = np.floor((min(tRs)-0.2*xscale)/xscale)*xscale
-    xmax = np.ceil((max(tRs)+0.2*xscale)/xscale)*xscale
-    ymin = np.floor((min(lnc)-0.2*yscale)/yscale)*yscale
-    ymax = np.ceil((max(lnc)+0.2*yscale)/yscale)*yscale
-
-    ax.set_xlim(xmin, xmax)
-    ax.set_xticks(np.arange(xmin, xmax+abs(0.00001*xmax), xscale))
-    ax.set_ylim(ymin, ymax)
-    ax.set_yticks(np.arange(ymin, ymax+abs(0.00001*ymax), yscale))
-    ax.set_xlabel(rf'{tR} / s')
-    ax.set_ylabel(rf'ln({XV0}$-${XV} / M)')
-    ax.set_title(rf'ln({XV0}$-${XV} / M) against {tR} / s for {XV0} = {c0*1e3:.0f} mM''\n'
-                 rf'with {film} film under {light} ({int(wavelength*1e9)} nm) light at {power*1e3:.1f} mW')
-    plt.show()
-
-# plots what the uv-vis detector sees over the course of the whole run
-def detectorconcplot(data, points, start, c0, x, film, light, wavelength, power, duration=1e10):
-
-    XV, XV0, peak, e, l = viologen(x)
-    t, c = concvstime(data, peak, e, l, start=start, duration=duration)
-    cscale = [conc*1e3 for conc in c] # plot concentrations in μM
-
-    fig, ax = plt.subplots()
-    ax.plot(t, cscale, color="black", alpha=0.2) # plot the overall detector 
-    for point in points: 
-        ax.axvline(x=point, color='black', linestyle='--') # plot vertical lines for each tR
-
-    fig.canvas.draw() # calculate ticks preliminarily
-    xscale = np.diff(ax.get_xticks())[0]
-    yscale = np.diff(ax.get_yticks())[0]
-    xmin = np.floor(min(t)/xscale)*xscale
-    xmax = np.ceil(max(t)/xscale)*xscale
-    ymin = np.floor((min(cscale)-0.2*yscale)/yscale)*yscale
-    ymax = np.ceil((max(cscale)+0.2*yscale)/yscale)*yscale
-    if abs(min(cscale)) < yscale: # if the smallest c value is approximately zero
-        ymin = 0
-
-    ax.set_xlim(xmin, xmax)
-    ax.set_xticks(np.arange(xmin, xmax+abs(0.001*xmax), xscale))
-    ax.set_ylim(ymin, ymax)
-    ax.set_yticks(np.arange(ymin, ymax+abs(0.001*ymax), yscale))
-    ax.set_xlabel(r'time / s')
-    ax.set_ylabel(rf'{XV} / mM')
-    ax.set_title(rf'Detected {XV} / mM over time / s for {XV0} = {c0*1e3:.0f} mM''\n'
-                 rf'with {film} film under {light} ({int(wavelength*1e9)} nm) light at {power*1e3:.1f} mW')
-    plt.show()
-
-# uv-vis absorption spectrum over time for each run
-def detectorspectrumplot(data, points, start, c0, x, film, light, wavelength, power, duration=1e10, 
-                         lmin=450, lmax=700, vmin=None, vmax=None):
-
-    XV, XV0, _, _, _ = viologen(x)
-    t, l, a = spectrumvstime(data, start=start, duration=duration)
-    mask = (lmin <= l) & (l <= lmax) 
-    a = a[mask, :]
-    l = l[mask]
-
-    if vmin == None:
-        vmin = np.floor(a.min()/0.1)*0.1 # round down to nearest 0.1
-    if vmax == None:
-        vmax = np.ceil(a.max()/0.1)*0.1 # round up to nearest 0.1
-    
-    fig, ax = plt.subplots(figsize=(8,3))
-    cmap = plt.get_cmap("viridis_r")
-    ax.contourf(t, l, a, levels=100, vmin=vmin, vmax=vmax, cmap=cmap)
-    for point in points: 
-        ax.axvline(x=point, color='black', linestyle='--') # plot vertical lines for each tR
-
-    norm = colors.Normalize(vmin=vmin, vmax=vmax)
-    sm = cm.ScalarMappable(norm=norm, cmap=cmap)
-    cbar = plt.colorbar(sm, ax=ax)
-    cbar.set_ticks(np.arange(vmin, vmax*1.001, 0.1))
-    cbar.set_label("absorbance")
-
-    fig.canvas.draw() # calculate ticks preliminarily
-    ax.set_ylim(lmin, lmax)
-    ax.set_xlabel("time / s")
-    ax.set_ylabel(r'$\lambda$ / nm')
-    ax.set_title(rf"UV-Vis spectra over time / s for {XV0} = {c0*1e3:.0f} mM""\n"
-                 rf'with {film} film under {light} ({int(wavelength*1e9)} nm) light at {power*1e3:.1f} mW')
-    plt.show()
-
-# absorbance spectra for each tR
-def spectrumvstimeplot(data, tRs, points, start, c0, x, film, light, wavelength, power, 
-                       lmin=450, lmax=700, setzero=True):
-
-    _, XV0, _, _, _ = viologen(x)
-    fig, ax = plt.subplots(figsize=(8, 5))
-    cmap = plt.get_cmap("viridis_r")
-    col = cmap(np.linspace(0, 1, len(tRs)))
-
-    l, a = spectrumvstimepoints(data, points=points, start=start)
-    mask = (lmin <= l) & (l <= lmax)
-    l = l[mask]
-    a = a[:, mask]
-
-    for i in range(len(tRs)):
-        ax.plot(l, a[i], color=col[i])
-
-    norm = colors.Normalize(0, len(tRs)-1)
-    sm = cm.ScalarMappable(norm=norm, cmap=cmap)
-    cbar = fig.colorbar(sm, ax=ax)
-    cbar.set_ticks(range(len(tRs)))
-    cbar.set_ticklabels(np.asarray(tRs)/60)
-    cbar.set_label(rf"{tR} / min")
-
-    fig.canvas.draw() # calculate ticks preliminarily
-    yscale = np.diff(ax.get_yticks())[0]
-    ymax = np.ceil((np.max(a)+0.2*yscale)/yscale)*yscale
-    if setzero:
-        ymin = 0
-    else:
-        ymin = np.ceil((np.min(a)-0.2*yscale)/yscale)*yscale
-    
-    ax.set_xlim(lmin, lmax)
-    ax.set_ylim(ymin, ymax)
-    ax.set_yticks(np.arange(ymin, ymax+abs(0.0001*ymax), yscale))
-    ax.set_xlabel(r'$\lambda$ / nm')
-    ax.set_ylabel('absorbance')
-    ax.set_title(rf'UV-Vis spectra against {tR} / s for {XV0} = {c0*1e3:.0f} mM''\n'
-                 rf'with {film} film under {light} ({int(wavelength*1e9)} nm) light at {power*1e3:.1f} mW')
-    plt.show()
+        return np.array(points)
