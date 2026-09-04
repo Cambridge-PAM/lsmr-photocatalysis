@@ -1,23 +1,30 @@
-from flow import *
+from lsmr_photocatalysis import ContinuousFlow, FLOW_PARAMS
+import numpy as np
 import serial
 import time
 from datetime import datetime, timedelta
 
-vrxn = 12*8.75*0.8 # reaction volume under light in ul
-vfull = 250 # full cell volume in ul
-tbuffer = 30 # time in s after the solution fully fills the cell before recording
+"""
+Automated pump control script to initiate flow rate changes according to the continuous flow scheme 
 
-tRs = [tR*60 for tR in range(1, 8)] # residence times in s for 1-7 min in 1 min intervals
-flowrates = [flowprop(tR=tR/60, vol=vrxn) for tR in tRs] # flow rates in ul/min for each tR
-points = flowpoints(tRs, tbuffer, vrxn, vfull) # time points in s to record absorbances
+tbuffer:    time in s after the solution fully fills the reactor chamber before recording
+vrxn:       reaction volume under LED/film in ul
+vfull:      full reactor chamber volume in ul
+"""
+
+tbuffer, vrxn, vfull = FLOW_PARAMS['250ul'] # change this if setup is different
+
+tRs = np.arange(60, 7*60+1, 60) # residence times in s for 1-7 min in 1 min intervals
+flowrates = vrxn/(tRs/60) # flow rates in ul/min for each tR
+points = ContinuousFlow.flowpoints(tRs, tbuffer, vrxn, vfull) # time points in s to record absorbances
 
 print()
-print(f'tRs (min): {[tR/60 for tR in tRs]}')
+print(f'tRs (min): {tRs/60}')
 print(f'Flowrates (ul/min): {flowrates}')
 print(f'Flowrate switch time intervals (s): {points}')
 print()
 
-com = 'COM4'
+com = 'COM4' # change this if necessary, check device manager
 
 # pump controls using rs-232 serial commands
 def rs232():
@@ -46,7 +53,7 @@ def rs232():
             if i == 0:
                 send(f'RAT {flowrates[i]} UM')
                 print()
-                print("Remember to have already started Ocean Optics data collection beforehand!")
+                print("Remember to have already started OceanView data collection beforehand!")
                 input("Press ENTER and turn LED on simultaneously to start...")
                 send('RUN')
                 start = time.perf_counter()
