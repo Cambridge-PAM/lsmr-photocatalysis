@@ -1,6 +1,6 @@
 # LSMR Photocatalysis
 
-Packages and notebooks for analysing LSMR photocatalysis results and an automated pump control script.
+Packages and notebooks for analysing Luminescent Solar Microreactor (LSMR) photocatalysis results and an automated pump control script.
 
 ## Features
 - Data extraction from OceanOptics/OceanView files
@@ -112,3 +112,10 @@ DATA_DIR = Path(__file__).parent.parent.parent / 'data'
 - Edit the `tRs` numpy array of residence times for the current experiment.
 - Add a new dictonary entry in `FLOW_PARAMS` in `./src/lsmr_photocatalysis/settings.py` if a new continuous flow setup has been created.
 - Run the `pump.py` script in VS Code or in the terminal when ready.
+
+## Contact
+
+Yu Hung Ng  
+St Catharine's College, Cambridge  
+yhn24@cam.ac.uk  
+brandon.ngyuhung@gmail.com
